@@ -14,7 +14,6 @@ names:
   12: "непровар корня"
 
 path: .
-
-train: train.txt
-val: val.txt
-test: test.txt
+train: data/train_samples.txt
+val: data/val_samples.txt
+#test: test.txt
