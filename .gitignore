@@ -1,4 +1,5 @@
 #.gitignore
+.idea
 ./venv/
 DS_Store
 
@@ -13,4 +14,5 @@ data/images/train/samples/
 # Разметка
 data/labels/test/
 data/labels/val/
-data/train/samples/
+data/labels/train/samples/
+data/labels/train/origin/
