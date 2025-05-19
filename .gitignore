@@ -1,14 +1,15 @@
 #.gitignore
-.idea
+.idea/
 ./venv/
 DS_Store
 
 # Картинки
-./data/films-1000/*
+data/films-1000/
 !data/films-1000/.gitkeep
 data/images/test/
 data/images/val/
 data/images/train/samples/
+data/images/train/origin/
 !data/images/train/origin/.gitkeep
 
 # Разметка
@@ -16,3 +17,10 @@ data/labels/test/
 data/labels/val/
 data/labels/train/samples/
 data/labels/train/origin/
+
+# .txt
+data/train.txt
+data/val.txt
+data/test.txt
+data/train_samples.txt
+data/val_samples.txt
