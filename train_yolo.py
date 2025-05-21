@@ -2,6 +2,7 @@
 train_yolo.py — удобная «обёртка» вокруг Ultralytics YOLO v8.
 
 Пример запуска:
+    На macbook:
     python train_yolo.py \
         --data data/data.yaml \
         --model yolov8s.pt \
@@ -10,6 +11,20 @@ train_yolo.py — удобная «обёртка» вокруг Ultralytics YOL
         --batch 4 \
         --device mps \
         --name YOLOv8_M2
+
+    На windows:
+    python train_yolo.py `
+    --data data/data.yaml `
+    --model yolov8s.pt `
+    --epochs 30 `
+    --imgsz 960 `
+    --batch 16 `        # 8 ГБ обычно держит 16-24 в FP16
+    --device 0 `
+    --half `            # FP16 экономит VRAM и ускоряет
+    --workers 8 `       # для Windows максимальное число потоков
+    --name YOLOv8_4060
+
+
 """
 from __future__ import annotations
 
