@@ -11,6 +11,16 @@ data/images/val/
 data/images/train/samples/
 data/images/train/origin/
 !data/images/train/origin/.gitkeep
+APPLICATION/app/images/*
+!APPLICATION/app/images/.gitkeep
+APPLICATION/app/static/results/*
+!APPLICATION/app/static/results/.gitkeep
+APPLICATION/app/temp_uploads/*
+!APPLICATION/app/temp_uploads/.gitkeep
+APPLICATION/predict_service/images/*
+!APPLICATION/predict_service/images/.gitkeep
+APPLICATION/predict_service/results/*
+!APPLICATION/predict_service/results/.gitkeep
 
 # Разметка
 data/labels/test/
