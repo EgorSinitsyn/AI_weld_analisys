@@ -1,7 +1,8 @@
 # visualize_samples_with_labels.py
 # YOLOv8 → нарезка панорамы → предсказания → склейка и показ
 '''
-python visualize_samples_with_labels.py data/images/test/origin/9-310-ls-34-b-01.png  --weights last.pt --conf 0.15
+пример
+python visualize_samples_with_labels.py data/images/val/samples/0-691-ls-14-d03   --weights last.pt --conf 0.15
 '''
 
 from __future__ import annotations
