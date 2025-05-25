@@ -48,7 +48,7 @@ services:
       - postgres
       - otel-collector
     ports:
-      - "8080:8080"
+      - "8001:8001"
     networks:
       - app-network
 

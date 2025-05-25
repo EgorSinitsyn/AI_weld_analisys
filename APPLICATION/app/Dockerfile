@@ -26,6 +26,7 @@ COPY app/weights   ./weights
 COPY app/images ./images
 COPY app/temp_uploads ./temp_uploads
 
-
+# задаём адрес ML-сервиса внутри Docker-сети
+ENV ML_SERVICE_URL=http://ml-service:8001
 
 CMD ["uvicorn", "app.main:application", "--host", "0.0.0.0", "--port", "8000"]

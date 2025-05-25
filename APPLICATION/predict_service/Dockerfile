@@ -19,7 +19,7 @@ COPY app/weights ./app/weights
 ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
     OTEL_SERVICE_NAME=ml-service
 
-EXPOSE 8080
+EXPOSE 8001
 
 CMD ["opentelemetry-instrument", "uvicorn", "predict_service.ml_service:app", \
-     "--host", "0.0.0.0", "--port", "8080"]
+     "--host", "0.0.0.0", "--port", "8001"]

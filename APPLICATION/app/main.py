@@ -1,34 +1,52 @@
+# APPLICATION/app/main.py
+
+from pathlib import Path
+import os
+# import threading
+
+import cv2
+import httpx
+# import uvicorn
 from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends, Request
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
-from fastapi.responses import JSONResponse, HTMLResponse
-import app.schemas as schemas
-import app.models as models
-from dotenv import load_dotenv
-from app.database import engine, get_db, Base
 from fastapi.middleware.cors import CORSMiddleware
-import cv2
-import numpy as np
-import os
-from pathlib import Path
-import httpx
-from app.visualize_predictions import PanoramaProcessor
+from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 
-# Загружаем переменные окружения из файла .env
+import app.schemas as schemas
+from app.schemas import GetImage, PredictResult
+from app.models import Images, Detections
+from app.database import engine, get_db, Base
+from app.utils import _slice_panorama, create_defects_report, ndarray_to_bytes
+from app.visualize_predictions import PanoramaProcessor
+# from predict_service.ml_service import app as model_app
+
+# -----------------------------------------------------------------------------
+# Загрузка переменных окружения
+# -----------------------------------------------------------------------------
 load_dotenv()
 
-# Базовый URL ML-сервиса, по умолчанию для локальной разработки
-ML_SERVICE_BASE_URL: str = os.getenv("ML_SERVICE_URL", "http://localhost:8080")
-ML_SERVICE_DETECT_ENDPOINT: str = f"{ML_SERVICE_BASE_URL}/detect"
+# -----------------------------------------------------------------------------
+# Конфигурация путей к директориям
+# -----------------------------------------------------------------------------
+HERE      = Path(__file__).resolve().parent
+TEMPLATES = HERE / "templates"
+STATIC    = HERE / "static"
+RESULTS   = STATIC / "results"
+REPORTS   = STATIC / "reports"
 
+# Убеждаемся, что нужные директории существуют
+RESULTS.mkdir(parents=True, exist_ok=True)
+REPORTS.mkdir(parents=True, exist_ok=True)
+
+# -----------------------------------------------------------------------------
 # Инициализация FastAPI-приложения
-application = FastAPI()
+# -----------------------------------------------------------------------------
+application = FastAPI(title="AI Weld Analysis Frontend")
 
-processor = PanoramaProcessor()
-
-
-# Настройка CORS (при необходимости)
+# Разрешаем CORS для любых источников (для разработки)
 application.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,187 +55,252 @@ application.add_middleware(
     allow_headers=["*"],
 )
 
-# Настройка статических файлов и шаблонов
-RESULTS_DIR = Path("static/results")
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-application.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# Монтируем статические файлы и настраиваем шаблоны
+application.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+templates = Jinja2Templates(directory=str(TEMPLATES))
 
-# Создание таблиц в базе данных при старте
+# Создаем таблицы в БД при старте
 Base.metadata.create_all(bind=engine)
+
+# Создаем экземпляр PanoramaProcessor для визуализации
+processor = PanoramaProcessor()
+
+# Адрес ML-сервиса
+ML_SERVICE_BASE_URL  = os.getenv("ML_SERVICE_URL", "http://localhost:8001")
+ML_SERVICE_DETECT_EP = f"{ML_SERVICE_BASE_URL}/detect"
+
 
 @application.get("/", response_class=HTMLResponse)
 def read_root(request: Request) -> HTMLResponse:
     """
-    Возвращает HTML-шаблон главной страницы приложения.
+    Отобразить главную страницу с интерфейсом загрузки и просмотра результатов.
 
-    Параметры:
+    Args:
         request (Request): Объект запроса FastAPI.
 
-    Возвращает:
+    Returns:
         HTMLResponse: Отрендеренный шаблон index.html.
     """
     return templates.TemplateResponse("index.html", {"request": request})
 
-@application.post("/upload")
-async def upload_image(file: UploadFile) -> dict[str, str]:
-    """
-    Принимает загруженное изображение и сохраняет его во временную папку.
 
-    Параметры:
+@application.post("/upload")
+async def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
+    """
+    Сохранить загруженную панораму и обработать ее PanoramaProcessor.
+
+    Args:
         file (UploadFile): Загруженный файл изображения.
 
-    Возвращает:
-        dict: Словарь с URL результата обработки.
+    Returns:
+        dict: Словарь с ключом 'result_url' — относительный путь к обработанному изображению.
+
+    Raises:
+        HTTPException: При ошибке чтения или обработки файла.
     """
-    # upload_dir = Path("temp_uploads")
-    # upload_dir.mkdir(exist_ok=True)
-    # temp_path = upload_dir / file.filename
-    # content = await file.read()
-    # if not content:
-    #     raise HTTPException(status_code=400, detail="Пустой файл")
-    # temp_path.write_bytes(content)
-    # # Здесь можно добавить логику PanoramaProcessor
-    # return {"result_url": f"/static/results/processed_{file.filename}"}
+    try:
+        temp_dir  = HERE / "temp_uploads"
+        temp_dir.mkdir(exist_ok=True)
+        temp_path = temp_dir / file.filename
 
-    # 1) Сохраняем во временную папку
-    upload_dir = Path("temp_uploads")
-    upload_dir.mkdir(exist_ok=True)
-    temp_path = upload_dir / file.filename
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Пустой файл")
-    temp_path.write_bytes(content)
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Пустой файл")
 
-    # 2) Обрабатываем панораму и получаем путь к результату
-    processor = PanoramaProcessor()
-    result_path_str = processor.process_image(str(temp_path))
-    result_path = Path(result_path_str)
+        temp_path.write_bytes(content)
 
-    if not result_path.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Процессор вернул несуществующий файл: {result_path}"
-        )
+        # output_path = processor.process_image(str(temp_path))
+        output_path, metadata = processor.process_image(str(temp_path))
+        filename    = Path(output_path).name
+        return {"result_url": f"/static/results/{filename}"}
 
-    # 3) Формируем URL относительно /static
-    #    (предположим, что он лежит в static/results)
-    filename = result_path.name
-    return {"result_url": f"/static/results/{filename}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@application.post('/api/predict', status_code=status.HTTP_201_CREATED)
+
+@application.post(
+    "/api/predict",
+    status_code=status.HTTP_201_CREATED,
+    response_model=list[PredictResult]
+)
 async def predict_defect(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
-) -> list[dict[str, object]]:
+) -> list[dict]:
     """
-    Обрабатывает загруженный файл панорамы: режет на тайлы, отправляет каждый тайл в ML-сервис,
-    собирает ответы и возвращает список результатов.
+    Разрезать панораму на тайлы, отправить каждый тайл в ML-сервис,
+    сохранить результаты в БД и сформировать отчёт.
 
-    Параметры:
+    Args:
         file (UploadFile): Загруженный файл панорамы.
-        db (Session): Сессия базы данных для хранения записей (не используется на текущем этапе).
+        db (Session): Сессия SQLAlchemy для работы с БД.
 
-    Возвращает:
-        list[dict]: Список словарей с полем 'status' и 'defects' для каждого тайла.
+    Returns:
+        list[dict]: Список словарей для каждого тайла:
+            - status: "success" или "no_defects"
+            - defects: список дефектов с полями:
+                class, confidence, index, coordinates, length
     """
+    # Проверка типа файла
     if not file.content_type.startswith("image/"):
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"message": "Файл должен быть изображением"}
         )
+
+    # Считываем содержимое
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Пустой файл")
 
-    # Декодируем изображение через OpenCV
-    nparr = np.frombuffer(content, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    # Временное сохранение для OpenCV
+    temp_dir  = HERE / "temp_uploads"
+    temp_dir.mkdir(exist_ok=True)
+    temp_path = temp_dir / file.filename
+    temp_path.write_bytes(content)
+
+    # Декодируем изображение
+    img = cv2.imread(str(temp_path))
     if img is None:
         raise HTTPException(status_code=422, detail="Не удалось прочитать изображение")
 
-    # Нарезаем панораму на тайлы
-    def slice_panorama(image: np.ndarray) -> list[np.ndarray]:
-        """
-        Возвращает список растров numpy, представляющих тайлы панорамы.
+    # Разбиваем панораму на тайлы
+    tiles   = _slice_panorama(img)
+    results = []
 
-        Параметры:
-            image (np.ndarray): Исходное изображение-панорама.
-
-        Возвращает:
-            list[np.ndarray]: Список разделённых тайлов.
-        """
-        size_map = {
-            (31920, 1152): 28,
-            (30780, 1152): 27,
-            (18144, 1142): 16,
-        }
-        h, w = image.shape[:2]
-        tiles_count = size_map.get((w, h))
-        if tiles_count is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Неизвестный размер панорамы {w}×{h}"
-            )
-        tile_width = w // tiles_count
-        return [image[:, i * tile_width:(i + 1) * tile_width] for i in range(tiles_count)]
-
-    tiles = slice_panorama(img)
-    combined_results: list[dict[str, object]] = []
-
-    async with httpx.AsyncClient() as client:
+    # Отправка запросов к ML-сервису
+    async with httpx.AsyncClient(timeout=60.0) as client:
         for tile in tiles:
-            success, buf = cv2.imencode('.png', tile)
-            if not success:
-                continue
-            files = {'file': ('tile.png', buf.tobytes(), 'image/png')}
-            resp = await client.post(ML_SERVICE_DETECT_ENDPOINT, files=files)
+            payload = {
+                'file': (
+                    'tile.png',
+                    ndarray_to_bytes(tile, format="png"),
+                    'image/png'
+                )
+            }
+            resp = await client.post(ML_SERVICE_DETECT_EP, files=payload)
             if resp.status_code != status.HTTP_201_CREATED:
-                raise HTTPException(status_code=502, detail="Ошибка ML-сервиса")
-            ml_json = resp.json()
-            combined_results.append({
-                "status": ml_json.get("status"),
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Ошибка ML-сервиса: {resp.text}"
+                )
+            ml_data = resp.json()
+
+            # Формируем запись с необходимыми полями
+            results.append({
+                "status": ml_data.get("status"),
                 "defects": [
-                    {"class": d['class'], "confidence": f"{d['confidence'] * 100:.2f}%"}
-                    for d in ml_json.get("detections", [])
+                    {
+                        "class":       d["class"],
+                        "confidence":  f"{d['confidence']*100:.2f}%",
+                        "index":       d["index"],
+                        "coordinates": d["coordinates"],
+                        "length":      d["length"],
+                    }
+                    for d in ml_data.get("detections", [])
                 ]
             })
 
-    return combined_results
+    # Сохраняем изображение в БД
+    db_image = Images(
+        filename=file.filename,
+        data=content,
+        content_type=file.content_type,
+        expansion=f".{file.filename.split('.')[-1]}"
+    )
+    db.add(db_image)
+    db.commit()
+    db.refresh(db_image)
 
-@application.get('/api/image/{id}', response_model=schemas.GetImage)
-def get_image(id: int, db: Session = Depends(get_db)) -> schemas.GetImage:
-    """
-    Возвращает запись изображения из БД по его идентификатору.
-
-    Параметры:
-        id (int): Идентификатор записи изображения.
-        db (Session): Сессия БД.
-
-    Возвращает:
-        GetImage: Pydantic-схема с данными изображения.
-    """
-    record = db.query(models.Images).filter(models.Images.id == id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Изображение не найдено")
-    return record
-
-@application.delete('/api/delete/image/{id}', status_code=status.HTTP_204_NO_CONTENT)
-def delete_image(id: int, db: Session = Depends(get_db)) -> None:
-    """
-    Удаляет запись изображения и связанные с ней детекции из БД.
-
-    Параметры:
-        id (int): Идентификатор записи изображения.
-        db (Session): Сессия БД.
-    """
-    record = db.query(models.Images).filter(models.Images.id == id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Изображение не найдено")
-    db.delete(record)
+    # Сохраняем детекции в БД
+    db_pred = Detections(
+        is_success=any(r["status"] == "success" for r in results),
+        defects=results,
+        image_id=db_image.id
+    )
+    db.add(db_pred)
     db.commit()
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(application, host="0.0.0.0", port=8000)
+    # Генерируем отчет Word
+    # create_defects_report(results)
+    create_defects_report(
+        results,
+        output_filename=str(REPORTS / "defects_report.docx")
+    )
 
+    return results
+
+
+@application.get(
+    "/api/image/{filename}",
+    response_model=GetImage,
+    status_code=status.HTTP_200_OK
+)
+def get_image(filename: str, db: Session = Depends(get_db)) -> GetImage:
+    """
+    Получить информацию о сохраненном изображении по его имени.
+
+    Args:
+        filename (str): Имя файла в БД.
+        db (Session): Сессия SQLAlchemy.
+
+    Returns:
+        GetImage: Pydantic-модель с id, filename, uploaded_at.
+    """
+    image = db.query(Images).filter(Images.filename == filename).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Изображение не найдено")
+    return image
+
+
+@application.delete(
+    "/api/delete/image/{filename}",
+    status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_image(filename: str, db: Session = Depends(get_db)) -> None:
+    """
+    Удалить запись об изображении и все связанные детекции по имени файла.
+
+    Args:
+        filename (str): Имя файла для удаления.
+        db (Session): Сессия SQLAlchemy.
+    """
+    image = db.query(Images).filter(Images.filename == filename).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Изображение не найдено")
+    db.delete(image)
+    db.commit()
+
+
+@application.get("/report", status_code=status.HTTP_200_OK)
+def get_report() -> dict[str, str]:
+    """
+    Вернуть ссылку на сгенерированный Word-отчет, если он существует.
+
+    Returns:
+        dict: {'report_url': '/static/reports/defects_report.docx'}
+
+    Raises:
+        HTTPException: Если файл отчета не найден.
+    """
+    report_path = REPORTS / "defects_report.docx"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Отчет не найден")
+    return {"report_url": f"/static/reports/{report_path.name}"}
+
+
+# -----------------------------------------------------------------------------
+# Для локального запуска обоих сервисов в одном процессе
+# -----------------------------------------------------------------------------
+# if __name__ == "__main__":
+#     # Запускаем ML-сервис на порте 8001 в фоновом потоке
+#     predictor_thread = threading.Thread(
+#         target=uvicorn.run,
+#         args=(model_app,),
+#         kwargs={"host": "0.0.0.0", "port": 8001, "log_level": "info"},
+#         daemon=True
+#     )
+#     predictor_thread.start()
+#
+#     # Запускаем фронтенд на порте 8000
+#     uvicorn.run(application, host="0.0.0.0", port=8000, log_level="info")
