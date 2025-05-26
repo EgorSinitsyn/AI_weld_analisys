@@ -3,16 +3,28 @@ from ultralytics import YOLO
 import cv2
 import os
 from PIL import Image
-# Создаем папку results, если её нет
-os.makedirs("results", exist_ok=True)
+from pathlib import Path
 
-# Инициализация модели
-model = YOLO(r"C:\codes\AI_mission\app\weights\lasted.pt")
 
-# Предсказание на тестовом изображении
-name = f't3.jpg'
-path = f"images/{name}"
-results = model.predict(path)
+# -----------------------------------------------------------------
+# 1) Определяем базовый каталог (папка, где находится try_model.py)
+BASE_DIR = Path(__file__).resolve().parent
+
+# 2) Формируем путь к весам относительно BASE_DIR
+WEIGHTS = BASE_DIR / "app" / "weights" / "model.pt"   # или "lasted.pt", если нужно
+
+# 3) Грузим модель
+model = YOLO(str(WEIGHTS))
+# ------------------------------------------------------------------
+
+# Создаём выходную папку
+( BASE_DIR / "results" ).mkdir(exist_ok=True)
+
+# Имя тестовой картинки
+name = "t3.jpg"
+path = BASE_DIR / "images" / name
+
+results = model.predict(str(path))
 
 SIZE_MAP = {
     (31920, 1152): 28,
