@@ -16,8 +16,10 @@ services:
     command: [ "--config=/etc/otel-collector-config.yaml" ]
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
-    ports:
-      - "4317:4317"
+#    ports:
+#      - "4317:4317"
+    expose:
+      - "4317"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:13133/healthz || exit 1"]
       interval: 10s
